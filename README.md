@@ -63,3 +63,5 @@ http://localhost:3000/embed?src=https%3A%2F%2Fdash.akamaized.net%2Fenvivio%2FEnv
 Player dijalankan di browser user, jadi origin stream tetap harus mengizinkan request media lewat CORS bila dibutuhkan player/library.
 
 Response error untuk endpoint publik sengaja dibuat tanpa body. Detail error backend dan error playback dari browser dicatat ke terminal server.
+
+Untuk source tertentu seperti Dens TV, server akan otomatis memakai preset header proxy yang lebih cocok tanpa perlu query tambahan manual.

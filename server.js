@@ -121,6 +121,9 @@ function createProxyToken(url, options = {}) {
     proxyUrl: url,
     referer: options.referer || "",
     originHeader: options.originHeader || "",
+    cookie: options.cookie || "",
+    acceptLanguage: options.acceptLanguage || "",
+    userAgent: options.userAgent || "",
   });
 }
 
@@ -417,6 +420,39 @@ function validateSource(rawSource) {
   return { sourceUrl: parsed.toString() };
 }
 
+function getSourcePreset(sourceUrl) {
+  try {
+    const parsed = new URL(sourceUrl);
+    const hostname = parsed.hostname.toLowerCase();
+
+    if (hostname.endsWith(".dens.tv") || hostname === "dens.tv") {
+      return {
+        referer: sourceUrl,
+        originHeader: parsed.origin,
+        cookie: "perf_dv6Tr4n=1",
+        acceptLanguage: "en-US,en;q=0.9,id-ID;q=0.8,id;q=0.7",
+        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      };
+    }
+
+    return {
+      referer: `${parsed.origin}/`,
+      originHeader: parsed.origin,
+      cookie: "",
+      acceptLanguage: "",
+      userAgent: "",
+    };
+  } catch {
+    return {
+      referer: "",
+      originHeader: "",
+      cookie: "",
+      acceptLanguage: "",
+      userAgent: "",
+    };
+  }
+}
+
 function rewriteHlsManifest(manifestText, baseUrl, origin, proxyOptions = {}) {
   const lines = manifestText.split(/\r?\n/);
 
@@ -475,6 +511,9 @@ function resolveEmbedParams(requestUrl) {
       title: requestUrl.searchParams.get("title"),
       engine: requestUrl.searchParams.get("engine"),
       referer: requestUrl.searchParams.get("referer"),
+      ua: requestUrl.searchParams.get("ua"),
+      cookie: requestUrl.searchParams.get("cookie"),
+      lang: requestUrl.searchParams.get("lang"),
       usedToken: false,
     };
   }
@@ -493,6 +532,9 @@ function resolveEmbedParams(requestUrl) {
     title: payload.title,
     engine: payload.engine,
     referer: payload.referer,
+    ua: payload.ua,
+    cookie: payload.cookie,
+    lang: payload.lang,
     usedToken: true,
   };
 }
@@ -507,6 +549,9 @@ function buildEmbedTokenPayload(params) {
     title: params.title || "",
     engine: params.engine || "auto",
     referer: params.referer || "",
+    ua: params.ua || "",
+    cookie: params.cookie || "",
+    lang: params.lang || "",
   };
 }
 
@@ -1667,19 +1712,32 @@ const server = http.createServer(async (request, response) => {
         return;
       }
 
+      const preset = getSourcePreset(validation.sourceUrl);
+
       const upstreamHeaders = {
-        "user-agent": request.headers["user-agent"] || "embedstreaming-proxy/1.0",
+        "user-agent": payload.userAgent || payload.ua || preset.userAgent || request.headers["user-agent"] || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
         accept: request.headers.accept || "*/*",
-        "accept-language": request.headers["accept-language"] || "en-US,en;q=0.9",
+        "accept-language": payload.acceptLanguage || payload.lang || preset.acceptLanguage || request.headers["accept-language"] || "en-US,en;q=0.9,id-ID;q=0.8,id;q=0.7",
+        "accept-encoding": "identity;q=1, *;q=0",
         pragma: "no-cache",
         "cache-control": "no-cache",
+        "sec-fetch-site": "same-origin",
+        "sec-fetch-mode": "no-cors",
+        "sec-fetch-dest": "video",
+        "sec-ch-ua": '"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
       };
 
       const upstreamUrl = new URL(validation.sourceUrl);
-      const referer = payload.referer || `${upstreamUrl.origin}/`;
-      const originHeader = payload.originHeader || upstreamUrl.origin;
+      const referer = payload.referer || preset.referer || `${upstreamUrl.origin}/`;
+      const originHeader = payload.originHeader || preset.originHeader || upstreamUrl.origin;
+      const cookie = payload.cookie || preset.cookie || "";
       upstreamHeaders.referer = referer;
       upstreamHeaders.origin = originHeader;
+      if (cookie) {
+        upstreamHeaders.cookie = cookie;
+      }
 
       if (request.headers.range) {
         upstreamHeaders.range = request.headers.range;
@@ -1712,7 +1770,22 @@ const server = http.createServer(async (request, response) => {
       const proxyOptions = {
         referer,
         originHeader,
+        cookie,
+        acceptLanguage: payload.acceptLanguage || payload.lang || preset.acceptLanguage || "",
+        userAgent: payload.userAgent || payload.ua || preset.userAgent || "",
       };
+
+      if (!upstreamResponse.ok) {
+        logError("proxy_upstream_failed", {
+          status: upstreamResponse.status,
+          proxyUrl: validation.sourceUrl,
+          referer,
+          originHeader,
+          cookie,
+          headers: summarizeHeaders(upstreamResponse.headers),
+          preview: bodyBuffer.toString("utf8").slice(0, 500),
+        });
+      }
 
       if (contentType.includes("application/vnd.apple.mpegurl") || contentType.includes("audio/mpegurl") || validation.sourceUrl.toLowerCase().endsWith(".m3u8")) {
         const rewritten = rewriteHlsManifest(bodyBuffer.toString("utf8"), upstreamResponse.url, origin, proxyOptions);
@@ -1760,6 +1833,7 @@ const server = http.createServer(async (request, response) => {
       const requestedType = (resolved.requestedType || "auto").toLowerCase();
       const inferredType = guessStreamType(validation.sourceUrl);
       const streamType = requestedType === "auto" ? inferredType : requestedType;
+      const preset = getSourcePreset(validation.sourceUrl);
 
       if (!["hls", "dash"].includes(streamType)) {
         logError("sign_invalid_stream_type", {
@@ -1789,7 +1863,10 @@ const server = http.createServer(async (request, response) => {
         controls: parseBoolean(resolved.controls, true),
         title: resolved.title,
         engine,
-        referer: resolved.referer || `${new URL(validation.sourceUrl).origin}/`,
+        referer: resolved.referer || preset.referer,
+        ua: resolved.ua || preset.userAgent,
+        cookie: resolved.cookie || preset.cookie,
+        lang: resolved.lang || preset.acceptLanguage,
       }));
 
       sendJson(response, 200, {
@@ -1825,6 +1902,7 @@ const server = http.createServer(async (request, response) => {
       const requestedType = (resolved.requestedType || "auto").toLowerCase();
       const inferredType = guessStreamType(validation.sourceUrl);
       const streamType = requestedType === "auto" ? inferredType : requestedType;
+      const preset = getSourcePreset(validation.sourceUrl);
 
       if (!["hls", "dash"].includes(streamType)) {
         logError("embed_invalid_stream_type", {
@@ -1850,8 +1928,11 @@ const server = http.createServer(async (request, response) => {
       const html = buildEmbedHtml({
         sourceUrl: validation.sourceUrl,
         playbackUrl: getProxyUrl(publicOrigin, validation.sourceUrl, {
-          referer: resolved.referer || `${new URL(validation.sourceUrl).origin}/`,
-          originHeader: new URL(validation.sourceUrl).origin,
+          referer: resolved.referer || preset.referer,
+          originHeader: preset.originHeader || new URL(validation.sourceUrl).origin,
+          cookie: resolved.cookie || preset.cookie || "",
+          acceptLanguage: resolved.lang || preset.acceptLanguage || "",
+          userAgent: resolved.ua || preset.userAgent || "",
         }),
         streamType,
         autoplay: parseBoolean(resolved.autoplay),
