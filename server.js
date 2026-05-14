@@ -101,6 +101,14 @@ function decodeEmbedToken(token) {
   }
 }
 
+function createProxyToken(url) {
+  return createEmbedToken({ proxyUrl: url });
+}
+
+function getProxyUrl(origin, url) {
+  return `${origin}/proxy?token=${encodeURIComponent(createProxyToken(url))}`;
+}
+
 function summarizeHeaders(headers) {
   return {
     contentType: headers.get("content-type"),
@@ -390,6 +398,52 @@ function validateSource(rawSource) {
   return { sourceUrl: parsed.toString() };
 }
 
+function rewriteHlsManifest(manifestText, baseUrl, origin) {
+  const lines = manifestText.split(/\r?\n/);
+
+  return lines.map((line) => {
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      return line;
+    }
+
+    if (trimmed.startsWith("#")) {
+      return line.replace(/URI="([^"]+)"/g, (_, uri) => {
+        const absoluteUrl = new URL(uri, baseUrl).toString();
+        return `URI="${getProxyUrl(origin, absoluteUrl)}"`;
+      });
+    }
+
+    return getProxyUrl(origin, new URL(trimmed, baseUrl).toString());
+  }).join("\n");
+}
+
+function rewriteDashManifest(mpdText, baseUrl, origin) {
+  return mpdText
+    .replace(/<BaseURL>([^<]+)<\/BaseURL>/g, (_, url) => {
+      const absoluteUrl = new URL(url.trim(), baseUrl).toString();
+      return `<BaseURL>${getProxyUrl(origin, absoluteUrl)}</BaseURL>`;
+    })
+    .replace(/\b(initialization|media|sourceURL|mediaRange|indexRange)="([^"]+)"/g, (full, attr, value) => {
+      if (!value || value.startsWith("$") || attr === "mediaRange" || attr === "indexRange") {
+        return full;
+      }
+
+      const absoluteUrl = new URL(value.trim(), baseUrl).toString();
+      return `${attr}="${getProxyUrl(origin, absoluteUrl)}"`;
+    })
+    .replace(/<(Initialization|SegmentURL)\b([^>]*?)\bsourceURL="([^"]+)"/g, (_, tag, rest, value) => {
+      const absoluteUrl = new URL(value.trim(), baseUrl).toString();
+      return `<${tag}${rest}sourceURL="${getProxyUrl(origin, absoluteUrl)}"`;
+    });
+}
+
+async function readResponseBody(response) {
+  const arrayBuffer = await response.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
 function resolveEmbedParams(requestUrl) {
   const token = requestUrl.searchParams.get("token");
   if (!token) {
@@ -471,9 +525,9 @@ function buildLandingPage(requestUrl) {
   };
 }
 
-function buildEmbedHtml({ sourceUrl, streamType, autoplay, muted, controls, title, engine }) {
+function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, controls, title, engine }) {
   const safeTitle = escapeHtml(title || "BangBot Player");
-  const safeSource = JSON.stringify(sourceUrl);
+  const safeSource = JSON.stringify(playbackUrl || sourceUrl);
   const safeType = JSON.stringify(streamType);
   const safeEngine = JSON.stringify(engine);
   const safeAutoplay = autoplay ? "true" : "false";
@@ -1509,7 +1563,7 @@ function buildEmbedHtml({ sourceUrl, streamType, autoplay, muted, controls, titl
 </html>`;
 }
 
-const server = http.createServer((request, response) => {
+const server = http.createServer(async (request, response) => {
   const requestUrl = new URL(request.url, `http://${request.headers.host || "localhost"}`);
 
   try {
@@ -1564,6 +1618,83 @@ const server = http.createServer((request, response) => {
         uptimeSeconds: Math.round(process.uptime()),
         timestamp: new Date().toISOString(),
       });
+      return;
+    }
+
+    if (requestUrl.pathname === "/proxy") {
+      const token = requestUrl.searchParams.get("token");
+      const payload = decodeEmbedToken(token);
+
+      if (!payload || typeof payload.proxyUrl !== "string") {
+        logError("proxy_invalid_token", {
+          path: requestUrl.pathname,
+          query: requestUrl.search,
+        });
+        sendEmpty(response, 400);
+        return;
+      }
+
+      const validation = validateSource(payload.proxyUrl);
+      if (validation.error) {
+        logError("proxy_validation_failed", {
+          error: validation.error,
+          proxyUrl: payload.proxyUrl,
+        });
+        sendEmpty(response, 400);
+        return;
+      }
+
+      const upstreamHeaders = {
+        "user-agent": request.headers["user-agent"] || "embedstreaming-proxy/1.0",
+      };
+
+      if (request.headers.range) {
+        upstreamHeaders.range = request.headers.range;
+      }
+
+      const upstreamResponse = await fetch(validation.sourceUrl, {
+        method: "GET",
+        headers: upstreamHeaders,
+        redirect: "follow",
+      });
+
+      const contentType = upstreamResponse.headers.get("content-type") || "application/octet-stream";
+      const responseHeaders = {
+        "Cache-Control": "no-store",
+        "Content-Type": contentType,
+        "Accept-Ranges": upstreamResponse.headers.get("accept-ranges") || "bytes",
+      };
+
+      const contentLength = upstreamResponse.headers.get("content-length");
+      const contentRange = upstreamResponse.headers.get("content-range");
+      if (contentLength) {
+        responseHeaders["Content-Length"] = contentLength;
+      }
+      if (contentRange) {
+        responseHeaders["Content-Range"] = contentRange;
+      }
+
+      const origin = `${requestUrl.protocol}//${request.headers.host || "localhost"}`;
+      const bodyBuffer = await readResponseBody(upstreamResponse);
+
+      if (contentType.includes("application/vnd.apple.mpegurl") || contentType.includes("audio/mpegurl") || validation.sourceUrl.toLowerCase().endsWith(".m3u8")) {
+        const rewritten = rewriteHlsManifest(bodyBuffer.toString("utf8"), upstreamResponse.url, origin);
+        responseHeaders["Content-Length"] = String(Buffer.byteLength(rewritten));
+        response.writeHead(upstreamResponse.status, responseHeaders);
+        response.end(rewritten);
+        return;
+      }
+
+      if (contentType.includes("application/dash+xml") || validation.sourceUrl.toLowerCase().endsWith(".mpd")) {
+        const rewritten = rewriteDashManifest(bodyBuffer.toString("utf8"), upstreamResponse.url, origin);
+        responseHeaders["Content-Length"] = String(Buffer.byteLength(rewritten));
+        response.writeHead(upstreamResponse.status, responseHeaders);
+        response.end(rewritten);
+        return;
+      }
+
+      response.writeHead(upstreamResponse.status, responseHeaders);
+      response.end(bodyBuffer);
       return;
     }
 
@@ -1680,6 +1811,7 @@ const server = http.createServer((request, response) => {
 
       const html = buildEmbedHtml({
         sourceUrl: validation.sourceUrl,
+        playbackUrl: getProxyUrl(requestUrl.origin, validation.sourceUrl),
         streamType,
         autoplay: parseBoolean(resolved.autoplay),
         muted: parseBoolean(resolved.muted),
