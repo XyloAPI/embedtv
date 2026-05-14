@@ -116,12 +116,16 @@ function decodeEmbedToken(token) {
   }
 }
 
-function createProxyToken(url) {
-  return createEmbedToken({ proxyUrl: url });
+function createProxyToken(url, options = {}) {
+  return createEmbedToken({
+    proxyUrl: url,
+    referer: options.referer || "",
+    originHeader: options.originHeader || "",
+  });
 }
 
-function getProxyUrl(origin, url) {
-  return `${origin}/proxy?token=${encodeURIComponent(createProxyToken(url))}`;
+function getProxyUrl(origin, url, options = {}) {
+  return `${origin}/proxy?token=${encodeURIComponent(createProxyToken(url, options))}`;
 }
 
 function summarizeHeaders(headers) {
@@ -413,7 +417,7 @@ function validateSource(rawSource) {
   return { sourceUrl: parsed.toString() };
 }
 
-function rewriteHlsManifest(manifestText, baseUrl, origin) {
+function rewriteHlsManifest(manifestText, baseUrl, origin, proxyOptions = {}) {
   const lines = manifestText.split(/\r?\n/);
 
   return lines.map((line) => {
@@ -426,19 +430,19 @@ function rewriteHlsManifest(manifestText, baseUrl, origin) {
     if (trimmed.startsWith("#")) {
       return line.replace(/URI="([^"]+)"/g, (_, uri) => {
         const absoluteUrl = new URL(uri, baseUrl).toString();
-        return `URI="${getProxyUrl(origin, absoluteUrl)}"`;
+        return `URI="${getProxyUrl(origin, absoluteUrl, proxyOptions)}"`;
       });
     }
 
-    return getProxyUrl(origin, new URL(trimmed, baseUrl).toString());
+    return getProxyUrl(origin, new URL(trimmed, baseUrl).toString(), proxyOptions);
   }).join("\n");
 }
 
-function rewriteDashManifest(mpdText, baseUrl, origin) {
+function rewriteDashManifest(mpdText, baseUrl, origin, proxyOptions = {}) {
   return mpdText
     .replace(/<BaseURL>([^<]+)<\/BaseURL>/g, (_, url) => {
       const absoluteUrl = new URL(url.trim(), baseUrl).toString();
-      return `<BaseURL>${getProxyUrl(origin, absoluteUrl)}</BaseURL>`;
+      return `<BaseURL>${getProxyUrl(origin, absoluteUrl, proxyOptions)}</BaseURL>`;
     })
     .replace(/\b(initialization|media|sourceURL|mediaRange|indexRange)="([^"]+)"/g, (full, attr, value) => {
       if (!value || value.startsWith("$") || attr === "mediaRange" || attr === "indexRange") {
@@ -446,11 +450,11 @@ function rewriteDashManifest(mpdText, baseUrl, origin) {
       }
 
       const absoluteUrl = new URL(value.trim(), baseUrl).toString();
-      return `${attr}="${getProxyUrl(origin, absoluteUrl)}"`;
+      return `${attr}="${getProxyUrl(origin, absoluteUrl, proxyOptions)}"`;
     })
     .replace(/<(Initialization|SegmentURL)\b([^>]*?)\bsourceURL="([^"]+)"/g, (_, tag, rest, value) => {
       const absoluteUrl = new URL(value.trim(), baseUrl).toString();
-      return `<${tag}${rest}sourceURL="${getProxyUrl(origin, absoluteUrl)}"`;
+      return `<${tag}${rest}sourceURL="${getProxyUrl(origin, absoluteUrl, proxyOptions)}"`;
     });
 }
 
@@ -470,6 +474,7 @@ function resolveEmbedParams(requestUrl) {
       controls: requestUrl.searchParams.get("controls"),
       title: requestUrl.searchParams.get("title"),
       engine: requestUrl.searchParams.get("engine"),
+      referer: requestUrl.searchParams.get("referer"),
       usedToken: false,
     };
   }
@@ -487,6 +492,7 @@ function resolveEmbedParams(requestUrl) {
     controls: payload.controls,
     title: payload.title,
     engine: payload.engine,
+    referer: payload.referer,
     usedToken: true,
   };
 }
@@ -500,6 +506,7 @@ function buildEmbedTokenPayload(params) {
     controls: Boolean(params.controls),
     title: params.title || "",
     engine: params.engine || "auto",
+    referer: params.referer || "",
   };
 }
 
@@ -1662,7 +1669,17 @@ const server = http.createServer(async (request, response) => {
 
       const upstreamHeaders = {
         "user-agent": request.headers["user-agent"] || "embedstreaming-proxy/1.0",
+        accept: request.headers.accept || "*/*",
+        "accept-language": request.headers["accept-language"] || "en-US,en;q=0.9",
+        pragma: "no-cache",
+        "cache-control": "no-cache",
       };
+
+      const upstreamUrl = new URL(validation.sourceUrl);
+      const referer = payload.referer || `${upstreamUrl.origin}/`;
+      const originHeader = payload.originHeader || upstreamUrl.origin;
+      upstreamHeaders.referer = referer;
+      upstreamHeaders.origin = originHeader;
 
       if (request.headers.range) {
         upstreamHeaders.range = request.headers.range;
@@ -1692,9 +1709,13 @@ const server = http.createServer(async (request, response) => {
 
       const origin = publicOrigin;
       const bodyBuffer = await readResponseBody(upstreamResponse);
+      const proxyOptions = {
+        referer,
+        originHeader,
+      };
 
       if (contentType.includes("application/vnd.apple.mpegurl") || contentType.includes("audio/mpegurl") || validation.sourceUrl.toLowerCase().endsWith(".m3u8")) {
-        const rewritten = rewriteHlsManifest(bodyBuffer.toString("utf8"), upstreamResponse.url, origin);
+        const rewritten = rewriteHlsManifest(bodyBuffer.toString("utf8"), upstreamResponse.url, origin, proxyOptions);
         responseHeaders["Content-Length"] = String(Buffer.byteLength(rewritten));
         response.writeHead(upstreamResponse.status, responseHeaders);
         response.end(rewritten);
@@ -1702,7 +1723,7 @@ const server = http.createServer(async (request, response) => {
       }
 
       if (contentType.includes("application/dash+xml") || validation.sourceUrl.toLowerCase().endsWith(".mpd")) {
-        const rewritten = rewriteDashManifest(bodyBuffer.toString("utf8"), upstreamResponse.url, origin);
+        const rewritten = rewriteDashManifest(bodyBuffer.toString("utf8"), upstreamResponse.url, origin, proxyOptions);
         responseHeaders["Content-Length"] = String(Buffer.byteLength(rewritten));
         response.writeHead(upstreamResponse.status, responseHeaders);
         response.end(rewritten);
@@ -1768,6 +1789,7 @@ const server = http.createServer(async (request, response) => {
         controls: parseBoolean(resolved.controls, true),
         title: resolved.title,
         engine,
+        referer: resolved.referer || `${new URL(validation.sourceUrl).origin}/`,
       }));
 
       sendJson(response, 200, {
@@ -1827,7 +1849,10 @@ const server = http.createServer(async (request, response) => {
 
       const html = buildEmbedHtml({
         sourceUrl: validation.sourceUrl,
-        playbackUrl: getProxyUrl(publicOrigin, validation.sourceUrl),
+        playbackUrl: getProxyUrl(publicOrigin, validation.sourceUrl, {
+          referer: resolved.referer || `${new URL(validation.sourceUrl).origin}/`,
+          originHeader: new URL(validation.sourceUrl).origin,
+        }),
         streamType,
         autoplay: parseBoolean(resolved.autoplay),
         muted: parseBoolean(resolved.muted),
