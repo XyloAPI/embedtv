@@ -103,22 +103,32 @@ function getPublicOrigin(request, requestUrl) {
 }
 
 function validateSource(rawSource) {
-  if (!rawSource) return { error: "Parameter 'src' wajib diisi." };
-
-  try {
-    const parsed = new URL(rawSource);
-    if (!["http:", "https:"].includes(parsed.protocol)) {
-      return { error: "Hanya URL http/https yang didukung." };
-    }
-    return { sourceUrl: parsed.toString() };
-  } catch {
-    return { error: "Parameter 'src' harus berupa URL yang valid." };
-  }
+  const sourceUrl = String(rawSource || "").trim();
+  if (!sourceUrl) return { error: "Parameter 'src' wajib diisi." };
+  return { sourceUrl };
 }
 
 function getPlaybackHintUrl(sourceUrl) {
+  const safeSourceUrl = String(sourceUrl || "").trim();
+  if (!safeSourceUrl) return "";
+
+  const lowerSourceUrl = safeSourceUrl.toLowerCase();
+  const nestedMarkers = ["url=", "src="];
+  for (const marker of nestedMarkers) {
+    const markerIndex = lowerSourceUrl.indexOf(marker);
+    if (markerIndex >= 0) {
+      const nestedValue = safeSourceUrl.slice(markerIndex + marker.length).split("&")[0].trim();
+      if (!nestedValue) continue;
+      try {
+        return decodeURIComponent(nestedValue);
+      } catch {
+        return nestedValue;
+      }
+    }
+  }
+
   try {
-    const parsed = new URL(sourceUrl);
+    const parsed = new URL(safeSourceUrl);
     const nestedUrl = String(parsed.searchParams.get("url") || "").trim();
     if (nestedUrl) {
       try {
@@ -129,13 +139,25 @@ function getPlaybackHintUrl(sourceUrl) {
     }
     return parsed.toString();
   } catch {
-    return String(sourceUrl || "").trim();
+    return safeSourceUrl;
   }
 }
 
 function getYouTubeVideoId(sourceUrl) {
+  const safeSourceUrl = String(sourceUrl || "").trim();
+  if (!safeSourceUrl) return "";
+
+  const shortMatch = safeSourceUrl.match(/youtu\.be\/([A-Za-z0-9_-]{6,})/i);
+  if (shortMatch) return shortMatch[1];
+
+  const watchMatch = safeSourceUrl.match(/[?&]v=([A-Za-z0-9_-]{6,})/i);
+  if (watchMatch) return watchMatch[1];
+
+  const pathMatch = safeSourceUrl.match(/youtube\.com\/(?:embed|live|shorts)\/([A-Za-z0-9_-]{6,})/i);
+  if (pathMatch) return pathMatch[1];
+
   try {
-    const parsed = new URL(sourceUrl);
+    const parsed = new URL(safeSourceUrl);
     const hostname = parsed.hostname.toLowerCase().replace(/^www\./, "");
 
     if (hostname === "youtu.be") {
@@ -185,10 +207,10 @@ function buildYouTubeEmbedUrl(sourceUrl, publicOrigin, autoplay, muted) {
 }
 
 function guessStreamType(sourceUrl) {
-  if (isYouTubeSource(sourceUrl)) return "youtube";
-  const pathname = new URL(getPlaybackHintUrl(sourceUrl)).pathname.toLowerCase();
-  if (pathname.endsWith(".m3u8")) return "hls";
-  if (pathname.endsWith(".mpd")) return "dash";
+  const safeValue = `${String(sourceUrl || "").trim()} ${getPlaybackHintUrl(sourceUrl)}`.toLowerCase();
+  if (safeValue.includes("youtube.com") || safeValue.includes("youtu.be")) return "youtube";
+  if (safeValue.includes(".m3u8")) return "hls";
+  if (safeValue.includes(".mpd")) return "dash";
   return "unknown";
 }
 
@@ -1123,8 +1145,34 @@ async function handleProxy(request, requestUrl, publicOrigin, secret) {
 }
 
 function resolveEmbedParams(requestUrl) {
+  const rawSearch = String(requestUrl.search || "");
+  let sourceUrl = requestUrl.searchParams.get("src");
+
+  if (rawSearch.includes("src=")) {
+    const knownKeys = ["type", "autoplay", "muted", "controls", "title", "engine", "referer", "cookie", "headers", "token"];
+    const srcStart = rawSearch.indexOf("src=") + 4;
+    let srcEnd = rawSearch.length;
+
+    for (const key of knownKeys) {
+      const marker = `&${key}=`;
+      const markerIndex = rawSearch.indexOf(marker, srcStart);
+      if (markerIndex >= 0 && markerIndex < srcEnd) {
+        srcEnd = markerIndex;
+      }
+    }
+
+    const rawSrcValue = rawSearch.slice(srcStart, srcEnd).replace(/^\?/, "");
+    if (rawSrcValue) {
+      try {
+        sourceUrl = decodeURIComponent(rawSrcValue);
+      } catch {
+        sourceUrl = rawSrcValue;
+      }
+    }
+  }
+
   return {
-    sourceUrl: requestUrl.searchParams.get("src"),
+    sourceUrl,
     requestedType: requestUrl.searchParams.get("type"),
     autoplay: requestUrl.searchParams.get("autoplay"),
     muted: requestUrl.searchParams.get("muted"),
