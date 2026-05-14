@@ -403,8 +403,40 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
       }
       .media-frame { display: block; border: 0; }
       .media-frame.youtube-frame { pointer-events: none; }
+      .youtube-mask {
+        position: absolute;
+        z-index: 2;
+        pointer-events: none;
+        display: none;
+      }
+      .player-shell.is-youtube .youtube-mask { display: block; }
+      .youtube-mask-top {
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 92px;
+        background:
+          linear-gradient(180deg, rgba(2,6,23,.94) 0%, rgba(2,6,23,.68) 54%, rgba(2,6,23,0) 100%);
+      }
+      .youtube-mask-bottom {
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 118px;
+        background:
+          linear-gradient(180deg, rgba(2,6,23,0) 0%, rgba(2,6,23,.62) 38%, rgba(2,6,23,.94) 100%);
+      }
+      .youtube-mask-bottom-right {
+        right: 14px;
+        bottom: 12px;
+        width: 188px;
+        height: 58px;
+        border-radius: 18px;
+        background: rgba(2,6,23,.92);
+        box-shadow: 0 0 0 1px rgba(255,255,255,.04) inset;
+      }
       .overlay {
-        position: absolute; inset: 0; display: block;
+        position: absolute; inset: 0; display: block; z-index: 3;
         background: linear-gradient(180deg, rgba(2,6,23,.28) 0%, rgba(2,6,23,.08) 24%, rgba(2,6,23,.42) 100%);
         pointer-events: none; transition: background .22s ease;
       }
@@ -497,9 +529,12 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
     <script src="https://www.youtube.com/iframe_api"></script>
   </head>
   <body>
-    <main class="player-shell">
+    <main class="player-shell ${streamType === "youtube" ? "is-youtube" : ""}">
       <video id="player" playsinline ${autoplay ? "autoplay" : ""} ${muted ? "muted" : ""} ${streamType === "youtube" ? "hidden" : ""}></video>
       <iframe id="youtubePlayer" class="media-frame ${streamType === "youtube" ? "youtube-frame" : ""}" src="${streamType === "youtube" ? escapeHtml(playbackUrl || sourceUrl) : ""}" title="${safeTitle}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen ${streamType === "youtube" ? "" : "hidden"}></iframe>
+      <div class="youtube-mask youtube-mask-top" ${streamType === "youtube" ? "" : "hidden"}></div>
+      <div class="youtube-mask youtube-mask-bottom" ${streamType === "youtube" ? "" : "hidden"}></div>
+      <div class="youtube-mask youtube-mask-bottom-right" ${streamType === "youtube" ? "" : "hidden"}></div>
       <div id="overlay" class="overlay">
         <div class="brand-corner">BangBot Player</div>
         <div class="live-corner"><div id="livePill" class="live-pill" hidden>Live</div></div>
