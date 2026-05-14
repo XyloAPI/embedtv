@@ -390,6 +390,7 @@ function buildLandingPage(origin, secret) {
       health: "/health",
       embed: "/embed?src=<stream-url>&type=<auto|hls|dash|youtube>",
       sign: "/sign?src=<stream-url>&type=<auto|hls|dash|youtube>",
+      builder: "/builder",
     },
     examples: {
       hls: `${origin}/embed?src=${encodeURIComponent(hlsSource)}`,
@@ -402,6 +403,275 @@ function buildLandingPage(origin, secret) {
       `EMBED_SECRET aktif: ${Boolean(secret) ? "yes" : "fallback-default"}`,
     ],
   };
+}
+
+function buildBuilderHtml() {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BangBot Builder</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #030712;
+        --panel: rgba(15, 23, 42, .78);
+        --panel-border: rgba(255,255,255,.08);
+        --text: #f8fafc;
+        --muted: rgba(248,250,252,.66);
+        --accent: #f8fafc;
+        --accent-dark: #0f172a;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; min-height: 100%; background: radial-gradient(circle at top, #111827 0%, #030712 52%, #020617 100%); color: var(--text); font-family: "Segoe UI", Arial, sans-serif; }
+      body { padding: 20px; }
+      .wrap { width: min(1120px, 100%); margin: 0 auto; display: grid; gap: 18px; }
+      .hero {
+        display: grid;
+        gap: 8px;
+        padding: 20px 22px;
+        border: 1px solid var(--panel-border);
+        border-radius: 24px;
+        background: linear-gradient(180deg, rgba(15,23,42,.88) 0%, rgba(15,23,42,.7) 100%);
+        box-shadow: 0 24px 80px rgba(0,0,0,.28);
+      }
+      .eyebrow {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: .18em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      h1 { margin: 0; font-size: clamp(28px, 4vw, 42px); line-height: 1.02; }
+      .sub { margin: 0; color: var(--muted); font-size: 14px; }
+      .grid {
+        display: grid;
+        grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+        gap: 18px;
+        align-items: start;
+      }
+      .panel {
+        border: 1px solid var(--panel-border);
+        border-radius: 24px;
+        background: var(--panel);
+        backdrop-filter: blur(14px);
+        box-shadow: 0 18px 60px rgba(0,0,0,.22);
+      }
+      .form-panel { padding: 18px; display: grid; gap: 14px; }
+      .field { display: grid; gap: 8px; }
+      .label { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+      .input, .select, .textarea {
+        width: 100%;
+        border: 1px solid rgba(255,255,255,.08);
+        border-radius: 16px;
+        background: rgba(2,6,23,.74);
+        color: var(--text);
+        padding: 13px 14px;
+        outline: none;
+      }
+      .input:focus, .select:focus, .textarea:focus { border-color: rgba(255,255,255,.24); }
+      .textarea { min-height: 108px; resize: vertical; }
+      .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .checks { display: flex; gap: 16px; flex-wrap: wrap; }
+      .check { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
+      .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+      .btn {
+        appearance: none;
+        border: 0;
+        border-radius: 16px;
+        padding: 13px 18px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .btn-primary { background: var(--accent); color: var(--accent-dark); }
+      .btn-secondary { background: rgba(255,255,255,.08); color: var(--text); }
+      .result-panel { padding: 18px; display: grid; gap: 16px; }
+      .result-box {
+        display: grid;
+        gap: 8px;
+        padding: 14px;
+        border-radius: 18px;
+        background: rgba(2,6,23,.74);
+        border: 1px solid rgba(255,255,255,.08);
+      }
+      .result-url {
+        margin: 0;
+        font-size: 13px;
+        line-height: 1.6;
+        color: var(--text);
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      .status { font-size: 13px; color: var(--muted); min-height: 18px; }
+      .preview-shell {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        border-radius: 22px;
+        overflow: hidden;
+        background: #000;
+        border: 1px solid rgba(255,255,255,.08);
+      }
+      .preview-frame { width: 100%; height: 100%; border: 0; background: #000; }
+      .preview-placeholder {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        color: var(--muted);
+        font-size: 14px;
+        text-align: center;
+        padding: 20px;
+      }
+      @media (max-width: 900px) {
+        body { padding: 12px; }
+        .grid { grid-template-columns: 1fr; }
+      }
+      @media (max-width: 640px) {
+        .hero, .form-panel, .result-panel { border-radius: 18px; }
+        .row { grid-template-columns: 1fr; }
+        .actions { display: grid; grid-template-columns: 1fr 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <section class="hero">
+        <div class="eyebrow">BangBot Builder</div>
+        <h1>Generate Embed URL + Preview</h1>
+        <p class="sub">Tempel source, generate, copy link, lalu cek player langsung jalan atau tidak.</p>
+      </section>
+      <section class="grid">
+        <form id="builderForm" class="panel form-panel">
+          <div class="field">
+            <label class="label" for="src">Source URL</label>
+            <textarea id="src" class="textarea" placeholder="https://example.com/stream.m3u8"></textarea>
+          </div>
+          <div class="row">
+            <div class="field">
+              <label class="label" for="type">Type</label>
+              <select id="type" class="select">
+                <option value="auto">Auto</option>
+                <option value="hls">HLS</option>
+                <option value="dash">DASH</option>
+                <option value="youtube">YouTube</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="label" for="engine">Engine</label>
+              <select id="engine" class="select">
+                <option value="auto">Auto</option>
+                <option value="hlsjs">HLS.js</option>
+                <option value="native">Native</option>
+              </select>
+            </div>
+          </div>
+          <div class="field">
+            <label class="label" for="title">Title</label>
+            <input id="title" class="input" type="text" placeholder="BangBot Player" />
+          </div>
+          <div class="checks">
+            <label class="check"><input id="autoplay" type="checkbox" /> Autoplay</label>
+            <label class="check"><input id="muted" type="checkbox" /> Muted</label>
+            <label class="check"><input id="controls" type="checkbox" checked /> Controls</label>
+          </div>
+          <div class="actions">
+            <button class="btn btn-primary" type="submit">Generate</button>
+            <button class="btn btn-secondary" type="button" id="copyBtn">Copy URL</button>
+          </div>
+        </form>
+        <section class="panel result-panel">
+          <div class="result-box">
+            <div class="label">Embed URL</div>
+            <pre id="resultUrl" class="result-url">Belum ada hasil.</pre>
+            <div id="status" class="status"></div>
+          </div>
+          <div class="preview-shell">
+            <iframe id="previewFrame" class="preview-frame" hidden></iframe>
+            <div id="previewPlaceholder" class="preview-placeholder">Preview player akan muncul di sini setelah link berhasil dibuat.</div>
+          </div>
+        </section>
+      </section>
+    </main>
+    <script>
+      const form = document.getElementById("builderForm");
+      const srcInput = document.getElementById("src");
+      const typeInput = document.getElementById("type");
+      const engineInput = document.getElementById("engine");
+      const titleInput = document.getElementById("title");
+      const autoplayInput = document.getElementById("autoplay");
+      const mutedInput = document.getElementById("muted");
+      const controlsInput = document.getElementById("controls");
+      const resultUrl = document.getElementById("resultUrl");
+      const statusEl = document.getElementById("status");
+      const previewFrame = document.getElementById("previewFrame");
+      const previewPlaceholder = document.getElementById("previewPlaceholder");
+      const copyBtn = document.getElementById("copyBtn");
+      let lastUrl = "";
+
+      async function copyText(value) {
+        if (!value) return;
+        try {
+          await navigator.clipboard.writeText(value);
+          statusEl.textContent = "URL berhasil dicopy.";
+        } catch {
+          statusEl.textContent = "Gagal copy otomatis.";
+        }
+      }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const src = String(srcInput.value || "").trim();
+        if (!src) {
+          statusEl.textContent = "Source URL wajib diisi.";
+          return;
+        }
+
+        const params = new URLSearchParams();
+        params.set("src", src);
+        if (typeInput.value) params.set("type", typeInput.value);
+        if (engineInput.value) params.set("engine", engineInput.value);
+        if (titleInput.value.trim()) params.set("title", titleInput.value.trim());
+        if (autoplayInput.checked) params.set("autoplay", "1");
+        if (mutedInput.checked) params.set("muted", "1");
+        if (controlsInput.checked) params.set("controls", "1");
+        else params.set("controls", "0");
+
+        statusEl.textContent = "Generating...";
+        resultUrl.textContent = "Loading...";
+        previewFrame.hidden = true;
+        previewPlaceholder.hidden = false;
+
+        try {
+          const response = await fetch("/sign?" + params.toString(), {
+            headers: { "Accept": "text/plain" }
+          });
+          const text = (await response.text()).trim();
+          if (!response.ok || !text) {
+            throw new Error(text || "Gagal generate link.");
+          }
+
+          lastUrl = text;
+          resultUrl.textContent = text;
+          previewFrame.src = text;
+          previewFrame.hidden = false;
+          previewPlaceholder.hidden = true;
+          statusEl.textContent = "Link siap. Preview dimuat.";
+        } catch (error) {
+          lastUrl = "";
+          resultUrl.textContent = "Gagal generate.";
+          previewFrame.removeAttribute("src");
+          previewFrame.hidden = true;
+          previewPlaceholder.hidden = false;
+          statusEl.textContent = error && error.message ? error.message : "Terjadi error.";
+        }
+      });
+
+      copyBtn.addEventListener("click", () => copyText(lastUrl));
+    </script>
+  </body>
+</html>`;
 }
 
 function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, controls, title, engine }) {
@@ -1304,6 +1574,10 @@ export default {
           status: "ok",
           timestamp: new Date().toISOString(),
         });
+      }
+
+      if (requestUrl.pathname === "/builder") {
+        return htmlResponse(buildBuilderHtml());
       }
 
       if (requestUrl.pathname === "/proxy") {
