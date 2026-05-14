@@ -1,0 +1,14 @@
+{
+  "name": "embedstreaming",
+  "version": "1.0.0",
+  "description": "Minimal backend for HLS and DASH embed player pages",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
