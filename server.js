@@ -119,8 +119,25 @@ function validateSource(rawSource) {
   }
 }
 
+function getPlaybackHintUrl(sourceUrl) {
+  try {
+    const parsed = new URL(sourceUrl);
+    const nestedUrl = String(parsed.searchParams.get("url") || "").trim();
+    if (nestedUrl) {
+      try {
+        return new URL(nestedUrl).toString();
+      } catch {
+        return parsed.toString();
+      }
+    }
+    return parsed.toString();
+  } catch {
+    return String(sourceUrl || "").trim();
+  }
+}
+
 function guessStreamType(sourceUrl) {
-  const pathname = new URL(sourceUrl).pathname.toLowerCase();
+  const pathname = new URL(getPlaybackHintUrl(sourceUrl)).pathname.toLowerCase();
   if (pathname.endsWith(".m3u8")) return "hls";
   if (pathname.endsWith(".mpd")) return "dash";
   return "unknown";
