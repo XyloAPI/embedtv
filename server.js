@@ -310,26 +310,55 @@ async function rewriteHlsManifest(manifestText, baseUrl, origin, proxyOptions, s
   return rewrittenLines.join("\n");
 }
 
+async function rewriteDashAttributeUrl(value, baseUrl, origin, proxyOptions, secret) {
+  const safeValue = String(value || "").trim();
+  if (!safeValue || safeValue.startsWith("data:") || safeValue.startsWith("urn:") || safeValue.startsWith("$")) {
+    return safeValue;
+  }
+
+  try {
+    const absoluteUrl = new URL(safeValue, baseUrl).toString();
+    return getProxyUrl(origin, absoluteUrl, proxyOptions, secret);
+  } catch {
+    return safeValue;
+  }
+}
+
 async function rewriteDashManifest(manifestText, baseUrl, origin, proxyOptions, secret) {
-  let output = manifestText;
-  const baseUrlMatches = [...output.matchAll(/<BaseURL>([^<]+)<\/BaseURL>/g)];
-  for (const match of baseUrlMatches) {
-    const absoluteUrl = new URL(match[1].trim(), baseUrl).toString();
-    const proxyUrl = await getProxyUrl(origin, absoluteUrl, proxyOptions, secret);
-    output = output.replace(match[0], `<BaseURL>${proxyUrl}</BaseURL>`);
-  }
+  try {
+    const document = new DOMParser().parseFromString(manifestText, "application/xml");
+    const parserError = document.querySelector("parsererror");
+    if (parserError) {
+      return manifestText;
+    }
 
-  const attrRegex = /\b(initialization|media|sourceURL|href|url)="([^"]+)"/g;
-  const attrMatches = [...output.matchAll(attrRegex)];
-  for (const match of attrMatches) {
-    const value = match[2];
-    if (!value || value.startsWith("$") || value.startsWith("urn:") || value.startsWith("data:")) continue;
-    const absoluteUrl = new URL(value.trim(), baseUrl).toString();
-    const proxyUrl = await getProxyUrl(origin, absoluteUrl, proxyOptions, secret);
-    output = output.replace(`${match[1]}="${value}"`, `${match[1]}="${proxyUrl}"`);
-  }
+    const urlAttributes = ["media", "initialization", "sourceURL", "href", "url"];
+    const allElements = Array.from(document.querySelectorAll("*"));
 
-  return output;
+    for (const rawElement of allElements) {
+      const element = rawElement;
+
+      for (const attributeName of urlAttributes) {
+        if (!element.hasAttribute(attributeName)) continue;
+        const originalValue = element.getAttribute(attributeName);
+        if (!originalValue) continue;
+        element.setAttribute(
+          attributeName,
+          await rewriteDashAttributeUrl(originalValue, baseUrl, origin, proxyOptions, secret)
+        );
+      }
+
+      if (element.localName === "BaseURL") {
+        const originalText = String(element.textContent || "").trim();
+        if (!originalText) continue;
+        element.textContent = await rewriteDashAttributeUrl(originalText, baseUrl, origin, proxyOptions, secret);
+      }
+    }
+
+    return new XMLSerializer().serializeToString(document);
+  } catch {
+    return manifestText;
+  }
 }
 
 function buildLandingPage(origin, secret) {
@@ -841,10 +870,36 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
         if (window.dashjs) {
           dashInstance = window.dashjs.MediaPlayer().create();
           dashInstance.initialize(video, sourceUrl, ${safeAutoplay});
+          dashInstance.updateSettings({
+            streaming: {
+              lowLatencyEnabled: false,
+            },
+          });
           sourcePrepared = true;
-          dashInstance.on("error", (event) => failSilently("dash_error", event));
-          dashInstance.on("bufferStalled", () => setBufferingState(true));
-          dashInstance.on("playbackPlaying", () => setBufferingState(false));
+          if (window.dashjs.MediaPlayer.events.MANIFEST_LOADED) {
+            dashInstance.on(window.dashjs.MediaPlayer.events.MANIFEST_LOADED, () => {
+              sourcePrepared = true;
+              updateTimeUi();
+            });
+          }
+          if (window.dashjs.MediaPlayer.events.STREAM_INITIALIZED) {
+            dashInstance.on(window.dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
+              sourcePrepared = true;
+              setBufferingState(false);
+              updateTimeUi();
+            });
+          }
+          if (window.dashjs.MediaPlayer.events.PLAYBACK_ERROR) {
+            dashInstance.on(window.dashjs.MediaPlayer.events.PLAYBACK_ERROR, (event) => {
+              reportError("dash_playback_error", event);
+            });
+          }
+          dashInstance.on(window.dashjs.MediaPlayer.events.ERROR, (event) => {
+            reportError("dash_error", event);
+            failSilently("dash_error", event);
+          });
+          video.addEventListener("waiting", () => setBufferingState(true));
+          video.addEventListener("playing", () => setBufferingState(false));
           return;
         }
         failSilently("dash_library_load_failed", { reason: "Library DASH tidak berhasil dimuat." });
