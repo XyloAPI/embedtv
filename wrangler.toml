@@ -1,0 +1,6 @@
+name = "bangbotplayer"
+main = "server.js"
+compatibility_date = "2026-05-14"
+
+[vars]
+EMBED_SECRET = "bangbot-dev-secret-change-me"
