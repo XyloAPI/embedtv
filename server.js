@@ -136,7 +136,59 @@ function getPlaybackHintUrl(sourceUrl) {
   }
 }
 
+function getYouTubeVideoId(sourceUrl) {
+  try {
+    const parsed = new URL(sourceUrl);
+    const hostname = parsed.hostname.toLowerCase().replace(/^www\./, "");
+
+    if (hostname === "youtu.be") {
+      return parsed.pathname.split("/").filter(Boolean)[0] || "";
+    }
+
+    if (hostname === "youtube.com" || hostname === "m.youtube.com") {
+      if (parsed.pathname === "/watch") {
+        return parsed.searchParams.get("v") || "";
+      }
+
+      const segments = parsed.pathname.split("/").filter(Boolean);
+      if (["embed", "live", "shorts"].includes(segments[0])) {
+        return segments[1] || "";
+      }
+    }
+  } catch {
+    return "";
+  }
+
+  return "";
+}
+
+function isYouTubeSource(sourceUrl) {
+  return Boolean(getYouTubeVideoId(sourceUrl));
+}
+
+function buildYouTubeEmbedUrl(sourceUrl, publicOrigin, autoplay, muted) {
+  const videoId = getYouTubeVideoId(sourceUrl);
+  if (!videoId) return "";
+
+  const embedUrl = new URL(`https://www.youtube.com/embed/${videoId}`);
+  embedUrl.searchParams.set("autoplay", autoplay ? "1" : "0");
+  embedUrl.searchParams.set("mute", muted ? "1" : "0");
+  embedUrl.searchParams.set("controls", "0");
+  embedUrl.searchParams.set("modestbranding", "1");
+  embedUrl.searchParams.set("rel", "0");
+  embedUrl.searchParams.set("playsinline", "1");
+  embedUrl.searchParams.set("enablejsapi", "1");
+  embedUrl.searchParams.set("fs", "0");
+  embedUrl.searchParams.set("iv_load_policy", "3");
+  embedUrl.searchParams.set("disablekb", "1");
+  if (publicOrigin) {
+    embedUrl.searchParams.set("origin", publicOrigin);
+  }
+  return embedUrl.toString();
+}
+
 function guessStreamType(sourceUrl) {
+  if (isYouTubeSource(sourceUrl)) return "youtube";
   const pathname = new URL(getPlaybackHintUrl(sourceUrl)).pathname.toLowerCase();
   if (pathname.endsWith(".m3u8")) return "hls";
   if (pathname.endsWith(".mpd")) return "dash";
@@ -288,8 +340,8 @@ function buildLandingPage(origin, secret) {
     status: "ok",
     endpoints: {
       health: "/health",
-      embed: "/embed?src=<stream-url>&type=<auto|hls|dash>",
-      sign: "/sign?src=<stream-url>&type=<auto|hls|dash>",
+      embed: "/embed?src=<stream-url>&type=<auto|hls|dash|youtube>",
+      sign: "/sign?src=<stream-url>&type=<auto|hls|dash|youtube>",
     },
     examples: {
       hls: `${origin}/embed?src=${encodeURIComponent(hlsSource)}`,
@@ -312,6 +364,7 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
   const safeAutoplay = autoplay ? "true" : "false";
   const safeMuted = muted ? "true" : "false";
   const safeControls = controls ? "true" : "false";
+  const safeIsYouTube = streamType === "youtube" ? "true" : "false";
 
   return `<!doctype html>
 <html lang="en">
@@ -341,7 +394,15 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
         background: #000;
         box-shadow: 0 24px 80px rgba(0,0,0,.45), 0 0 0 1px rgba(255,255,255,.06);
       }
-      video { width: 100%; height: 100%; background: #000; object-fit: contain; object-position: center center; }
+      video, .media-frame {
+        width: 100%;
+        height: 100%;
+        background: #000;
+        object-fit: contain;
+        object-position: center center;
+      }
+      .media-frame { display: block; border: 0; }
+      .media-frame.youtube-frame { pointer-events: none; }
       .overlay {
         position: absolute; inset: 0; display: block;
         background: linear-gradient(180deg, rgba(2,6,23,.28) 0%, rgba(2,6,23,.08) 24%, rgba(2,6,23,.42) 100%);
@@ -370,7 +431,7 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
       .play-spinner {
         position: absolute; inset: 50% auto auto 50%; width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%;
         border: 3px solid rgba(15,23,42,.18); border-top-color: rgba(15,23,42,.92); opacity: 0; transform: scale(.72);
-        transition: opacity .18s ease, transform .18s ease; animation: spin .9s linear infinite; pointer-events: none;
+        transition: opacity .18s ease, transform .18s ease; animation: spin .9s linear infinite; pointer-events: none; --spinner-scale: .72;
       }
       .play-icon-play, .play-icon-pause-left, .play-icon-pause-right { transform-box: fill-box; transform-origin: center; transition: transform .22s ease, opacity .22s ease; }
       .play-icon-play { transform: scale(1) translateX(0); opacity: 1; }
@@ -380,7 +441,7 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
       .play-button.is-playing .play-icon-play { transform: scale(.55); opacity: 0; }
       .play-button.is-playing .play-icon-pause-left, .play-button.is-playing .play-icon-pause-right { opacity: 1; transform: translateX(0) scaleY(1); }
       .play-button.is-buffering .play-icon-play, .play-button.is-buffering .play-icon-pause-left, .play-button.is-buffering .play-icon-pause-right { opacity: 0; transform: scale(.5); }
-      .play-button.is-buffering .play-spinner { opacity: 1; transform: scale(1); }
+      .play-button.is-buffering .play-spinner { opacity: 1; transform: scale(1); --spinner-scale: 1; }
       .pulse-ring { position: absolute; width: 84px; height: 84px; border-radius: 999px; border: 1px solid rgba(255,255,255,.32); background: rgba(255,255,255,.08); opacity: 0; transform: scale(.88); pointer-events: none; }
       .pulse-ring.active { animation: pulse-ring .42s ease-out; }
       .controls-shell {
@@ -411,9 +472,12 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
       .volume-wrap.open { width: 132px; opacity: 1; transform: translateX(0); }
       .overlay.is-playing .center-play { opacity: 0; }
       .overlay.is-hovered .center-play, .overlay.is-paused .center-play { opacity: 1; }
-      video[hidden], .overlay[hidden] { display: none; }
+      video[hidden], .media-frame[hidden], .overlay[hidden] { display: none; }
       @keyframes pulse-ring { 0% { opacity: .5; transform: scale(.88); } 100% { opacity: 0; transform: scale(1.45); } }
-      @keyframes spin { to { transform: rotate(360deg); } }
+      @keyframes spin {
+        from { transform: scale(var(--spinner-scale, .72)) rotate(0deg); }
+        to { transform: scale(var(--spinner-scale, .72)) rotate(360deg); }
+      }
       @media (max-width: 640px) {
         body { padding: 0; }
         .play-button, .pulse-ring { width: 78px; height: 78px; }
@@ -430,10 +494,12 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
     </style>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
+    <script src="https://www.youtube.com/iframe_api"></script>
   </head>
   <body>
     <main class="player-shell">
-      <video id="player" playsinline ${autoplay ? "autoplay" : ""} ${muted ? "muted" : ""}></video>
+      <video id="player" playsinline ${autoplay ? "autoplay" : ""} ${muted ? "muted" : ""} ${streamType === "youtube" ? "hidden" : ""}></video>
+      <iframe id="youtubePlayer" class="media-frame ${streamType === "youtube" ? "youtube-frame" : ""}" src="${streamType === "youtube" ? escapeHtml(playbackUrl || sourceUrl) : ""}" title="${safeTitle}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen ${streamType === "youtube" ? "" : "hidden"}></iframe>
       <div id="overlay" class="overlay">
         <div class="brand-corner">BangBot Player</div>
         <div class="live-corner"><div id="livePill" class="live-pill" hidden>Live</div></div>
@@ -476,8 +542,10 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
       const sourceUrl = ${safeSource};
       const streamType = ${safeType};
       const engine = ${safeEngine};
+      const isYouTube = ${safeIsYouTube};
       const playerShell = document.querySelector(".player-shell");
       const video = document.getElementById("player");
+      const youtubeIframe = document.getElementById("youtubePlayer");
       const overlay = document.getElementById("overlay");
       const playButton = document.getElementById("playButton");
       const pulseRing = document.getElementById("pulseRing");
@@ -495,12 +563,42 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
       let sourcePrepared = false;
       let hlsInstance = null;
       let dashInstance = null;
+      let youtubePlayer = null;
+      let youtubeReady = false;
+      let youtubeState = -1;
+      let youtubeTickTimer = null;
       let isSeeking = false;
       let controlsHideTimer = null;
-      video.autoplay = ${safeAutoplay};
-      video.muted = ${safeMuted};
-      video.controls = false;
+      if (!isYouTube) {
+        video.autoplay = ${safeAutoplay};
+        video.muted = ${safeMuted};
+        video.controls = false;
+      }
       function syncFrameRatio() { if (video.videoWidth && video.videoHeight) playerShell.style.setProperty("--frame-ratio", video.videoWidth + " / " + video.videoHeight); }
+      function getIsPlaying() {
+        if (isYouTube) return youtubeState === 1;
+        return !video.paused && !video.ended;
+      }
+      function getIsEnded() {
+        if (isYouTube) return youtubeState === 0;
+        return video.ended;
+      }
+      function getCurrentTimeValue() {
+        if (isYouTube && youtubePlayer && youtubeReady) return Number(youtubePlayer.getCurrentTime() || 0);
+        return video.currentTime || 0;
+      }
+      function getDurationValue() {
+        if (isYouTube && youtubePlayer && youtubeReady) return Number(youtubePlayer.getDuration() || 0);
+        return video.duration || 0;
+      }
+      function getMutedValue() {
+        if (isYouTube && youtubePlayer && youtubeReady) return Boolean(youtubePlayer.isMuted());
+        return Boolean(video.muted || video.volume === 0);
+      }
+      function getVolumeValue() {
+        if (isYouTube && youtubePlayer && youtubeReady) return Number(youtubePlayer.getVolume() || 0);
+        return Math.round((video.muted ? 0 : video.volume) * 100);
+      }
       function formatTime(seconds) {
         if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
         const whole = Math.floor(seconds), hours = Math.floor(whole / 3600), minutes = Math.floor((whole % 3600) / 60), secs = whole % 60;
@@ -508,39 +606,41 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
       }
       function setRangeProgress(element, value, max) { element.style.setProperty("--value", (max > 0 ? value / max * 100 : 0) + "%"); }
       function updateTimeUi() {
-        const isLive = !Number.isFinite(video.duration) || video.duration === Infinity;
+        const durationValue = getDurationValue();
+        const currentValue = getCurrentTimeValue();
+        const isLive = !Number.isFinite(durationValue) || durationValue === Infinity || durationValue <= 0;
         livePill.hidden = !isLive;
         seekbar.disabled = isLive;
         if (isLive) {
-          timeLabel.textContent = formatTime(video.currentTime) + " / LIVE";
+          timeLabel.textContent = formatTime(currentValue) + " / LIVE";
           setRangeProgress(seekbar, 0, 1);
           return;
         }
-        const current = isSeeking ? Number(seekbar.value) / 1000 * (video.duration || 0) : video.currentTime;
-        const duration = video.duration || 0;
+        const current = isSeeking ? Number(seekbar.value) / 1000 * durationValue : currentValue;
+        const duration = durationValue;
         timeLabel.textContent = formatTime(current) + " / " + formatTime(duration);
         const progress = duration > 0 ? current / duration * 1000 : 0;
         if (!isSeeking) seekbar.value = String(progress);
         setRangeProgress(seekbar, Number(seekbar.value || 0), 1000);
       }
       function updateVolumeUi() {
-        const volumeValue = video.muted ? 0 : Math.round(video.volume * 100);
+        const volumeValue = getVolumeValue();
         volumeSlider.value = String(volumeValue);
         setRangeProgress(volumeSlider, volumeValue, 100);
-        muteButton.setAttribute("aria-label", video.muted || video.volume === 0 ? "Unmute" : "Mute");
-        muteIcon.innerHTML = video.muted || video.volume === 0
+        muteButton.setAttribute("aria-label", getMutedValue() ? "Unmute" : "Mute");
+        muteIcon.innerHTML = getMutedValue()
           ? '<path d="M4.5 9.5a1 1 0 0 1 1-1H8l4.1-3.28c.66-.53 1.65-.06 1.65.79v11.98c0 .85-.99 1.32-1.65.79L8 15.5H5.5a1 1 0 0 1-1-1v-5Z"></path><path d="M17.28 7.78a.75.75 0 1 1 1.06-1.06L21.62 10a.75.75 0 0 1 0 1.06l-3.28 3.28a.75.75 0 1 1-1.06-1.06L19.5 11.06l-2.22-2.22Z"></path>'
           : '<path d="M14.82 5.18a.75.75 0 0 1 1.06 0A8.94 8.94 0 0 1 18.5 12a8.94 8.94 0 0 1-2.62 6.82.75.75 0 0 1-1.06-1.06A7.44 7.44 0 0 0 17 12a7.44 7.44 0 0 0-2.18-5.76.75.75 0 0 1 0-1.06ZM4.5 9.5a1 1 0 0 1 1-1H8l4.1-3.28c.66-.53 1.65-.06 1.65.79v11.98c0 .85-.99 1.32-1.65.79L8 15.5H5.5a1 1 0 0 1-1-1v-5Z"></path>';
       }
       function updatePlayUi() {
-        const isPlaying = !video.paused && !video.ended;
+        const isPlaying = getIsPlaying();
         controlPlay.setAttribute("aria-label", isPlaying ? "Pause" : "Play");
         controlPlayIcon.innerHTML = isPlaying
           ? '<rect x="6.5" y="5.2" width="4.2" height="13.6" rx="1.2"></rect><rect x="13.3" y="5.2" width="4.2" height="13.6" rx="1.2"></rect>'
           : '<path d="M8 5.14v13.72c0 .77.83 1.25 1.5.86l10.5-6.86a1 1 0 0 0 0-1.72L9.5 4.28A1 1 0 0 0 8 5.14Z"></path>';
       }
       function syncPlayButton() {
-        const isPlaying = !video.paused && !video.ended;
+        const isPlaying = getIsPlaying();
         playButton.classList.toggle("is-playing", isPlaying);
         playButton.classList.toggle("is-paused", !isPlaying);
         playButton.setAttribute("aria-label", isPlaying ? "Pause video" : "Play video");
@@ -559,7 +659,7 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
         if (!${safeControls}) return;
         controlsShell.classList.remove("hidden");
         clearTimeout(controlsHideTimer);
-        if (!video.paused && !video.ended) controlsHideTimer = setTimeout(() => controlsShell.classList.add("hidden"), 2200);
+        if (getIsPlaying() && !getIsEnded()) controlsHideTimer = setTimeout(() => controlsShell.classList.add("hidden"), 2200);
       }
       function toggleVolumePanel(forceOpen) {
         const nextState = typeof forceOpen === "boolean" ? forceOpen : !volumeWrap.classList.contains("open");
@@ -582,6 +682,19 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
       }
       function togglePlayback(scope) {
         if (!sourcePrepared && streamType === "hls" && hlsInstance) reportError(scope + "_before_hls_ready", { sourceUrl });
+        if (isYouTube) {
+          if (!youtubePlayer || !youtubeReady) {
+            reportError(scope + "_before_youtube_ready", { sourceUrl });
+            return;
+          }
+          animateButton();
+          if (youtubeState === 1 || youtubeState === 3) {
+            youtubePlayer.pauseVideo();
+          } else {
+            youtubePlayer.playVideo();
+          }
+          return;
+        }
         if (!video.paused && !video.ended) {
           animateButton();
           video.pause();
@@ -591,6 +704,16 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
         tryPlay(scope + "_failed");
       }
       function tryPlay(scope) {
+        if (isYouTube) {
+          if (!youtubePlayer || !youtubeReady) {
+            reportError(scope, { reason: "youtube_not_ready" });
+            return;
+          }
+          animateButton();
+          youtubePlayer.playVideo();
+          syncPlayButton();
+          return;
+        }
         const playPromise = video.play();
         if (!playPromise || typeof playPromise.then !== "function") {
           animateButton();
@@ -604,10 +727,55 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
       }
       function failSilently(scope, details) {
         video.hidden = true;
+        youtubeIframe.hidden = true;
         overlay.hidden = true;
         reportError(scope, details);
       }
       function setBufferingState(isBuffering) { playButton.classList.toggle("is-buffering", isBuffering); }
+      function loadYouTube() {
+        youtubeIframe.hidden = false;
+        video.hidden = true;
+
+        function attachYouTubePlayer() {
+          if (!window.YT || !window.YT.Player) return false;
+          youtubePlayer = new window.YT.Player("youtubePlayer", {
+            events: {
+              onReady: () => {
+                youtubeReady = true;
+                sourcePrepared = true;
+                updateVolumeUi();
+                updateTimeUi();
+                if (${safeMuted}) youtubePlayer.mute();
+                if (${safeAutoplay}) youtubePlayer.playVideo();
+              },
+              onStateChange: (event) => {
+                youtubeState = Number(event.data);
+                setBufferingState(youtubeState === 3);
+                syncPlayButton();
+                updateTimeUi();
+                if (youtubeState === 1) showControls();
+              },
+              onError: (event) => {
+                failSilently("youtube_error", event);
+              }
+            }
+          });
+
+          clearInterval(youtubeTickTimer);
+          youtubeTickTimer = setInterval(() => {
+            if (!youtubeReady) return;
+            updateTimeUi();
+          }, 500);
+          return true;
+        }
+
+        if (attachYouTubePlayer()) return;
+        const previousReady = window.onYouTubeIframeAPIReady;
+        window.onYouTubeIframeAPIReady = () => {
+          if (typeof previousReady === "function") previousReady();
+          attachYouTubePlayer();
+        };
+      }
       function loadHls() {
         if ((engine === "hlsjs" || engine === "auto") && window.Hls && window.Hls.isSupported()) {
           hlsInstance = new window.Hls({ enableWorker: true, lowLatencyMode: true });
@@ -646,7 +814,8 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
         }
         failSilently("dash_library_load_failed", { reason: "Library DASH tidak berhasil dimuat." });
       }
-      if (streamType === "hls") loadHls();
+      if (streamType === "youtube") loadYouTube();
+      else if (streamType === "hls") loadHls();
       else if (streamType === "dash") loadDash();
       else failSilently("unknown_stream_type", { reason: "Tipe stream tidak dikenali." });
       playButton.addEventListener("click", () => togglePlayback("manual_play"));
@@ -654,21 +823,42 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
       muteButton.addEventListener("click", () => {
         const panelOpen = volumeWrap.classList.contains("open");
         if (!panelOpen) { toggleVolumePanel(true); showControls(); return; }
-        video.muted = !video.muted;
+        if (isYouTube) {
+          if (!youtubePlayer || !youtubeReady) return;
+          if (youtubePlayer.isMuted()) youtubePlayer.unMute();
+          else youtubePlayer.mute();
+        } else {
+          video.muted = !video.muted;
+        }
         updateVolumeUi();
         showControls();
       });
       volumeSlider.addEventListener("input", () => {
         const volumeValue = Number(volumeSlider.value) / 100;
-        video.volume = volumeValue;
-        video.muted = volumeValue === 0;
+        if (isYouTube) {
+          if (!youtubePlayer || !youtubeReady) return;
+          youtubePlayer.setVolume(Math.round(volumeValue * 100));
+          if (volumeValue === 0) youtubePlayer.mute();
+          else youtubePlayer.unMute();
+        } else {
+          video.volume = volumeValue;
+          video.muted = volumeValue === 0;
+        }
         updateVolumeUi();
         toggleVolumePanel(true);
         showControls();
       });
       seekbar.addEventListener("input", () => { isSeeking = true; updateTimeUi(); showControls(); });
       seekbar.addEventListener("change", () => {
-        if (Number.isFinite(video.duration) && video.duration > 0) video.currentTime = Number(seekbar.value) / 1000 * video.duration;
+        const duration = getDurationValue();
+        if (Number.isFinite(duration) && duration > 0) {
+          const nextTime = Number(seekbar.value) / 1000 * duration;
+          if (isYouTube) {
+            if (youtubePlayer && youtubeReady) youtubePlayer.seekTo(nextTime, true);
+          } else {
+            video.currentTime = nextTime;
+          }
+        }
         isSeeking = false;
         updateTimeUi();
       });
@@ -684,7 +874,7 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
       video.addEventListener("click", (event) => { if (!shouldIgnoreShellClick(event)) togglePlayback("video_click"); });
       pulseRing.addEventListener("animationend", () => pulseRing.classList.remove("active"));
       playerShell.addEventListener("pointermove", () => { overlay.classList.add("is-hovered"); showControls(); });
-      playerShell.addEventListener("pointerleave", () => { overlay.classList.remove("is-hovered"); toggleVolumePanel(false); if (!video.paused && !video.ended && ${safeControls}) controlsShell.classList.add("hidden"); });
+      playerShell.addEventListener("pointerleave", () => { overlay.classList.remove("is-hovered"); toggleVolumePanel(false); if (getIsPlaying() && !getIsEnded() && ${safeControls}) controlsShell.classList.add("hidden"); });
       video.addEventListener("play", syncPlayButton);
       video.addEventListener("pause", syncPlayButton);
       video.addEventListener("ended", syncPlayButton);
@@ -914,7 +1104,7 @@ export default {
         const requestedType = (resolved.requestedType || "auto").toLowerCase();
         const inferredType = guessStreamType(validation.sourceUrl);
         const streamType = requestedType === "auto" ? inferredType : requestedType;
-        if (!["hls", "dash"].includes(streamType)) {
+        if (!["hls", "dash", "youtube"].includes(streamType)) {
           logError("sign_invalid_stream_type", { requestedType, inferredType, sourceUrl: validation.sourceUrl });
           return emptyResponse(400);
         }
@@ -977,7 +1167,7 @@ export default {
         const requestedType = (resolved.requestedType || "auto").toLowerCase();
         const inferredType = guessStreamType(validation.sourceUrl);
         const streamType = requestedType === "auto" ? inferredType : requestedType;
-        if (!["hls", "dash"].includes(streamType)) {
+        if (!["hls", "dash", "youtube"].includes(streamType)) {
           logError("embed_invalid_stream_type", { requestedType, inferredType, sourceUrl: validation.sourceUrl });
           return emptyResponse(400);
         }
@@ -988,7 +1178,9 @@ export default {
           return emptyResponse(400);
         }
 
-        const playbackUrl = await getProxyUrl(publicOrigin, validation.sourceUrl, createProxyOptions(validation.sourceUrl, resolved), secret);
+        const playbackUrl = streamType === "youtube"
+          ? buildYouTubeEmbedUrl(validation.sourceUrl, publicOrigin, parseBoolean(resolved.autoplay), parseBoolean(resolved.muted))
+          : await getProxyUrl(publicOrigin, validation.sourceUrl, createProxyOptions(validation.sourceUrl, resolved), secret);
         return htmlResponse(buildEmbedHtml({
           sourceUrl: validation.sourceUrl,
           playbackUrl,
