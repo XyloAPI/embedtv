@@ -104,9 +104,6 @@ function getPublicOrigin(request, requestUrl) {
 
 function validateSource(rawSource) {
   if (!rawSource) return { error: "Parameter 'src' wajib diisi." };
-  if (rawSource.includes("/http://") || rawSource.includes("/https://")) {
-    return { error: "Parameter 'src' terlihat malformed atau terduplikasi." };
-  }
 
   try {
     const parsed = new URL(rawSource);
