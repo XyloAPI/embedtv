@@ -1988,7 +1988,7 @@ const server = http.createServer(async (request, response) => {
         sourceUrl: validation.sourceUrl,
         playbackUrl: getProxyUrl(publicOrigin, validation.sourceUrl, {
           referer: resolved.referer || preset.referer,
-          originHeader: preset.originHeader || new URL(validation.sourceUrl).origin,
+          originHeader: resolved.originHeader || preset.originHeader || "",
           cookie: resolved.cookie || preset.cookie || "",
           acceptLanguage: resolved.lang || preset.acceptLanguage || "",
           userAgent: resolved.ua || preset.userAgent || "",
