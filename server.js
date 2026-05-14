@@ -542,12 +542,22 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
       .control-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-width: 0; }
       .control-group { display: flex; align-items: center; gap: 10px; min-width: 0; }
       .control-group.right { margin-left: auto; justify-content: flex-end; }
+      .control-group.left { flex: 1 1 auto; min-width: 0; }
       .control-btn {
         display: inline-grid; place-items: center; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 999px;
         background: rgba(255,255,255,.08); color: #f8fafc; cursor: pointer; transition: transform .16s ease, background .16s ease;
       }
       .control-btn svg { width: 18px; height: 18px; fill: currentColor; }
-      .time-label { color: rgba(248,250,252,.94); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
+      .time-label {
+        color: rgba(248,250,252,.94);
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+        text-align: left;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
       .volume-wrap { display: flex; align-items: center; gap: 10px; width: 0; overflow: hidden; opacity: 0; transform: translateX(-6px); transition: width .18s ease, opacity .18s ease, transform .18s ease; }
       .volume-wrap.open { width: 132px; opacity: 1; transform: translateX(0); }
       .overlay.is-playing .center-play { opacity: 0; }
@@ -559,17 +569,36 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
         to { transform: scale(var(--spinner-scale, .72)) rotate(360deg); }
       }
       @media (max-width: 640px) {
-        body { padding: 0; }
+        html, body { height: 100dvh; }
+        body { padding: 0; display: block; }
         .play-button, .pulse-ring { width: 78px; height: 78px; }
-        .player-shell { width: 100%; max-height: 100vh; border-radius: 0; }
+        .player-shell {
+          width: 100vw;
+          max-width: 100vw;
+          height: auto;
+          max-height: 100dvh;
+          min-height: 100dvh;
+          border-radius: 0;
+        }
         .brand-corner, .live-corner { top: 10px; }
         .brand-corner { left: 10px; font-size: 10px; padding: 8px 11px; }
         .live-corner { right: 10px; }
-        .controls-shell { padding: 28px 10px 10px; }
-        .control-row { gap: 8px; }
+        .controls-shell { padding: 28px 10px calc(env(safe-area-inset-bottom, 0px) + 10px); }
+        .control-row { gap: 8px; align-items: center; }
+        .control-group.left { gap: 8px; }
+        .control-group.right { gap: 6px; flex: 0 0 auto; }
         .control-btn { width: 36px; height: 36px; }
         .volume-wrap.open { width: 72px; }
-        .time-label { font-size: 12px; }
+        .time-label { font-size: 12px; max-width: 112px; }
+        .seek-wrap { margin-bottom: 10px; }
+      }
+      @media (max-width: 420px) {
+        .controls-shell { padding-left: 8px; padding-right: 8px; }
+        .play-button, .pulse-ring { width: 72px; height: 72px; }
+        .control-btn { width: 34px; height: 34px; }
+        .control-btn svg { width: 17px; height: 17px; }
+        .time-label { max-width: 88px; font-size: 11px; }
+        .volume-wrap.open { width: 64px; }
       }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
@@ -602,7 +631,7 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
         <div id="controlsShell" class="controls-shell ${controls ? "" : "hidden"}">
           <div class="seek-wrap"><input id="seekbar" class="seekbar" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek" /></div>
           <div class="control-row">
-            <div class="control-group">
+            <div class="control-group left">
               <button id="controlPlay" class="control-btn" type="button" aria-label="Play">
                 <svg id="controlPlayIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.14v13.72c0 .77.83 1.25 1.5.86l10.5-6.86a1 1 0 0 0 0-1.72L9.5 4.28A1 1 0 0 0 8 5.14Z"></path></svg>
               </button>
@@ -815,6 +844,41 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
         reportError(scope, details);
       }
       function setBufferingState(isBuffering) { playButton.classList.toggle("is-buffering", isBuffering); }
+      function isFullscreenActive() {
+        return Boolean(
+          document.fullscreenElement
+          || document.webkitFullscreenElement
+          || document.msFullscreenElement
+        );
+      }
+      async function enterFullscreen() {
+        const fullscreenTarget = isYouTube ? playerShell : (video || playerShell);
+
+        if (fullscreenTarget && typeof fullscreenTarget.requestFullscreen === "function") {
+          await fullscreenTarget.requestFullscreen();
+          return true;
+        }
+        if (playerShell && typeof playerShell.webkitRequestFullscreen === "function") {
+          playerShell.webkitRequestFullscreen();
+          return true;
+        }
+        if (!isYouTube && video && typeof video.webkitEnterFullscreen === "function") {
+          video.webkitEnterFullscreen();
+          return true;
+        }
+        return false;
+      }
+      async function exitFullscreen() {
+        if (typeof document.exitFullscreen === "function" && document.fullscreenElement) {
+          await document.exitFullscreen();
+          return true;
+        }
+        if (typeof document.webkitExitFullscreen === "function" && document.webkitFullscreenElement) {
+          document.webkitExitFullscreen();
+          return true;
+        }
+        return false;
+      }
       function loadYouTube() {
         youtubeIframe.hidden = false;
         video.hidden = true;
@@ -973,8 +1037,14 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
       });
       fullscreenButton.addEventListener("click", async () => {
         try {
-          if (document.fullscreenElement) await document.exitFullscreen();
-          else await playerShell.requestFullscreen();
+          if (isFullscreenActive()) {
+            await exitFullscreen();
+          } else {
+            const didEnter = await enterFullscreen();
+            if (!didEnter) {
+              reportError("fullscreen_not_supported", { isYouTube });
+            }
+          }
         } catch (error) {
           reportError("fullscreen_failed", { message: error && error.message ? error.message : String(error) });
         }
@@ -998,6 +1068,7 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
       video.addEventListener("seeking", () => setBufferingState(true));
       video.addEventListener("seeked", () => setBufferingState(false));
       document.addEventListener("fullscreenchange", () => showControls());
+      document.addEventListener("webkitfullscreenchange", () => showControls());
       syncPlayButton();
       updateVolumeUi();
       updateTimeUi();
