@@ -50,6 +50,21 @@ function parseBoolean(value, defaultValue = false) {
   return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
 }
 
+function getHeaderValue(header) {
+  if (Array.isArray(header)) {
+    return header[0];
+  }
+  return header || "";
+}
+
+function getPublicOrigin(request) {
+  const forwardedProto = getHeaderValue(request.headers["x-forwarded-proto"]).split(",")[0].trim();
+  const forwardedHost = getHeaderValue(request.headers["x-forwarded-host"]).split(",")[0].trim();
+  const host = forwardedHost || getHeaderValue(request.headers.host) || "localhost";
+  const proto = forwardedProto || "http";
+  return `${proto}://${host}`;
+}
+
 function base64UrlEncode(value) {
   return Buffer.from(value)
     .toString("base64")
@@ -1565,6 +1580,7 @@ function buildEmbedHtml({ sourceUrl, playbackUrl, streamType, autoplay, muted, c
 
 const server = http.createServer(async (request, response) => {
   const requestUrl = new URL(request.url, `http://${request.headers.host || "localhost"}`);
+  const publicOrigin = getPublicOrigin(request);
 
   try {
     if (requestUrl.pathname === "/__client-error" && request.method === "POST") {
@@ -1674,7 +1690,7 @@ const server = http.createServer(async (request, response) => {
         responseHeaders["Content-Range"] = contentRange;
       }
 
-      const origin = `${requestUrl.protocol}//${request.headers.host || "localhost"}`;
+      const origin = publicOrigin;
       const bodyBuffer = await readResponseBody(upstreamResponse);
 
       if (contentType.includes("application/vnd.apple.mpegurl") || contentType.includes("audio/mpegurl") || validation.sourceUrl.toLowerCase().endsWith(".m3u8")) {
@@ -1756,7 +1772,7 @@ const server = http.createServer(async (request, response) => {
 
       sendJson(response, 200, {
         token,
-        embedUrl: `${requestUrl.origin}/embed?token=${token}`,
+        embedUrl: `${publicOrigin}/embed?token=${token}`,
       });
       return;
     }
@@ -1811,7 +1827,7 @@ const server = http.createServer(async (request, response) => {
 
       const html = buildEmbedHtml({
         sourceUrl: validation.sourceUrl,
-        playbackUrl: getProxyUrl(requestUrl.origin, validation.sourceUrl),
+        playbackUrl: getProxyUrl(publicOrigin, validation.sourceUrl),
         streamType,
         autoplay: parseBoolean(resolved.autoplay),
         muted: parseBoolean(resolved.muted),
@@ -1853,4 +1869,3 @@ server.on("error", (error) => {
 server.listen(PORT, HOST, () => {
   console.log(`embedstreaming listening on http://${HOST}:${PORT}`);
 });
-
