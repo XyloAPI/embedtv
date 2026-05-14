@@ -1102,6 +1102,17 @@ function htmlResponse(html, status = 200) {
   });
 }
 
+function textResponse(text, status = 200) {
+  return new Response(String(text ?? ""), {
+    status,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
 function emptyResponse(status = 204) {
   return new Response(null, {
     status,
@@ -1335,10 +1346,19 @@ export default {
           headers: proxyOptions.headers,
         }, secret);
 
-        return jsonResponse({
-          token,
-          embedUrl: `${publicOrigin}/embed?token=${token}`,
-        });
+        const embedUrl = `${publicOrigin}/embed?token=${token}`;
+        const output = String(requestUrl.searchParams.get("output") || "").toLowerCase();
+        const acceptHeader = String(request.headers.get("accept") || "").toLowerCase();
+        const wantsJson = output === "json" || acceptHeader.includes("application/json");
+
+        if (wantsJson) {
+          return jsonResponse({
+            token,
+            embedUrl,
+          });
+        }
+
+        return textResponse(embedUrl);
       }
 
       if (requestUrl.pathname === "/embed") {
