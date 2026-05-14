@@ -50,6 +50,36 @@ function parseBoolean(value, defaultValue = false) {
   return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
 }
 
+function parseHeaderLines(rawHeaders) {
+  const headers = {};
+  const input = String(rawHeaders || "").trim();
+  if (!input) {
+    return headers;
+  }
+
+  input.split(/\r?\n/).forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    const separatorIndex = trimmed.indexOf(":");
+    if (separatorIndex <= 0) {
+      return;
+    }
+
+    const name = trimmed.slice(0, separatorIndex).trim().toLowerCase();
+    const value = trimmed.slice(separatorIndex + 1).trim();
+    if (!name || !value) {
+      return;
+    }
+
+    headers[name] = value;
+  });
+
+  return headers;
+}
+
 function getHeaderValue(header) {
   if (Array.isArray(header)) {
     return header[0];
@@ -124,6 +154,7 @@ function createProxyToken(url, options = {}) {
     cookie: options.cookie || "",
     acceptLanguage: options.acceptLanguage || "",
     userAgent: options.userAgent || "",
+    headers: options.headers || "",
   });
 }
 
@@ -428,10 +459,24 @@ function getSourcePreset(sourceUrl) {
     if (hostname.endsWith(".dens.tv") || hostname === "dens.tv") {
       return {
         referer: sourceUrl,
-        originHeader: parsed.origin,
         cookie: "perf_dv6Tr4n=1",
         acceptLanguage: "en-US,en;q=0.9,id-ID;q=0.8,id;q=0.7",
         userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+        extraHeaders: [
+          "Accept: */*",
+          "Accept-Encoding: identity;q=1, *;q=0",
+          "Accept-Language: en-US,en;q=0.9,id-ID;q=0.8,id;q=0.7",
+          "Cache-Control: no-cache",
+          "Pragma: no-cache",
+          "Priority: i",
+          'Sec-CH-UA: "Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"',
+          "Sec-CH-UA-Mobile: ?0",
+          'Sec-CH-UA-Platform: "Windows"',
+          "Sec-Fetch-Dest: video",
+          "Sec-Fetch-Mode: no-cors",
+          "Sec-Fetch-Site: same-origin",
+          "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+        ].join("\n"),
       };
     }
 
@@ -441,6 +486,7 @@ function getSourcePreset(sourceUrl) {
       cookie: "",
       acceptLanguage: "",
       userAgent: "",
+      extraHeaders: "",
     };
   } catch {
     return {
@@ -449,6 +495,7 @@ function getSourcePreset(sourceUrl) {
       cookie: "",
       acceptLanguage: "",
       userAgent: "",
+      extraHeaders: "",
     };
   }
 }
@@ -514,6 +561,7 @@ function resolveEmbedParams(requestUrl) {
       ua: requestUrl.searchParams.get("ua"),
       cookie: requestUrl.searchParams.get("cookie"),
       lang: requestUrl.searchParams.get("lang"),
+      headers: requestUrl.searchParams.get("headers"),
       usedToken: false,
     };
   }
@@ -535,6 +583,7 @@ function resolveEmbedParams(requestUrl) {
     ua: payload.ua,
     cookie: payload.cookie,
     lang: payload.lang,
+    headers: payload.headers,
     usedToken: true,
   };
 }
@@ -552,6 +601,7 @@ function buildEmbedTokenPayload(params) {
     ua: params.ua || "",
     cookie: params.cookie || "",
     lang: params.lang || "",
+    headers: params.headers || "",
   };
 }
 
@@ -1713,6 +1763,7 @@ const server = http.createServer(async (request, response) => {
       }
 
       const preset = getSourcePreset(validation.sourceUrl);
+      const customHeaders = parseHeaderLines(payload.headers || preset.extraHeaders || "");
 
       const upstreamHeaders = {
         "user-agent": payload.userAgent || payload.ua || preset.userAgent || request.headers["user-agent"] || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
@@ -1728,13 +1779,18 @@ const server = http.createServer(async (request, response) => {
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Windows"',
       };
+      Object.assign(upstreamHeaders, customHeaders);
 
       const upstreamUrl = new URL(validation.sourceUrl);
       const referer = payload.referer || preset.referer || `${upstreamUrl.origin}/`;
-      const originHeader = payload.originHeader || preset.originHeader || upstreamUrl.origin;
+      const originHeader = payload.originHeader || preset.originHeader || "";
       const cookie = payload.cookie || preset.cookie || "";
       upstreamHeaders.referer = referer;
-      upstreamHeaders.origin = originHeader;
+      if (originHeader) {
+        upstreamHeaders.origin = originHeader;
+      } else {
+        delete upstreamHeaders.origin;
+      }
       if (cookie) {
         upstreamHeaders.cookie = cookie;
       }
@@ -1773,6 +1829,7 @@ const server = http.createServer(async (request, response) => {
         cookie,
         acceptLanguage: payload.acceptLanguage || payload.lang || preset.acceptLanguage || "",
         userAgent: payload.userAgent || payload.ua || preset.userAgent || "",
+        headers: payload.headers || preset.extraHeaders || "",
       };
 
       if (!upstreamResponse.ok) {
@@ -1782,7 +1839,8 @@ const server = http.createServer(async (request, response) => {
           referer,
           originHeader,
           cookie,
-          headers: summarizeHeaders(upstreamResponse.headers),
+        headers: summarizeHeaders(upstreamResponse.headers),
+          requestHeaders: upstreamHeaders,
           preview: bodyBuffer.toString("utf8").slice(0, 500),
         });
       }
@@ -1867,6 +1925,7 @@ const server = http.createServer(async (request, response) => {
         ua: resolved.ua || preset.userAgent,
         cookie: resolved.cookie || preset.cookie,
         lang: resolved.lang || preset.acceptLanguage,
+        headers: resolved.headers || preset.extraHeaders || "",
       }));
 
       sendJson(response, 200, {
@@ -1933,6 +1992,7 @@ const server = http.createServer(async (request, response) => {
           cookie: resolved.cookie || preset.cookie || "",
           acceptLanguage: resolved.lang || preset.acceptLanguage || "",
           userAgent: resolved.ua || preset.userAgent || "",
+          headers: resolved.headers || preset.extraHeaders || "",
         }),
         streamType,
         autoplay: parseBoolean(resolved.autoplay),
