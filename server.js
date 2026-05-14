@@ -524,6 +524,10 @@ function buildBuilderHtml() {
         text-align: center;
         padding: 20px;
       }
+      .preview-frame[hidden],
+      .preview-placeholder[hidden] {
+        display: none !important;
+      }
       @media (max-width: 900px) {
         body { padding: 12px; }
         .grid { grid-template-columns: 1fr; }
@@ -539,8 +543,8 @@ function buildBuilderHtml() {
     <main class="wrap">
       <section class="hero">
         <div class="eyebrow">BangBot Builder</div>
-        <h1>Generate Embed URL + Preview</h1>
-        <p class="sub">Tempel source, generate, copy link, lalu cek player langsung jalan atau tidak.</p>
+        <h1>Generate Embed Player</h1>
+        <p class="sub">Yang YTTA Aja</p>
       </section>
       <section class="grid">
         <form id="builderForm" class="panel form-panel">
