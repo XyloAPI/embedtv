@@ -390,6 +390,7 @@ function buildLandingPage(origin, secret) {
       health: "/health",
       embed: "/embed?src=<stream-url>&type=<auto|hls|dash|youtube>",
       sign: "/sign?src=<stream-url>&type=<auto|hls|dash|youtube>",
+      decode: "/decode?token=<embed-token>",
       builder: "/builder",
     },
     examples: {
@@ -476,6 +477,7 @@ function buildBuilderHtml() {
       .checks { display: flex; gap: 16px; flex-wrap: wrap; }
       .check { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
       .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+      .actions.three { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .btn {
         appearance: none;
         border: 0;
@@ -503,6 +505,7 @@ function buildBuilderHtml() {
         white-space: pre-wrap;
         word-break: break-all;
       }
+      .result-stack { display: grid; gap: 12px; }
       .status { font-size: 13px; color: var(--muted); min-height: 18px; }
       .preview-shell {
         position: relative;
@@ -536,6 +539,7 @@ function buildBuilderHtml() {
         .hero, .form-panel, .result-panel { border-radius: 18px; }
         .row { grid-template-columns: 1fr; }
         .actions { display: grid; grid-template-columns: 1fr 1fr; }
+        .actions.three { grid-template-columns: 1fr; }
       }
     </style>
   </head>
@@ -572,6 +576,14 @@ function buildBuilderHtml() {
             </div>
           </div>
           <div class="field">
+            <label class="label" for="externalProxy">External Proxy</label>
+            <select id="externalProxy" class="select">
+              <option value="">None</option>
+              <option value="https://wulkjzoejwaaonhxpbbt.supabase.co/functions/v1/stream-proxy?url=">Supabase</option>
+              <option value="https://cors-proxy.cooks.fyi/">CORS Proxy</option>
+            </select>
+          </div>
+          <div class="field">
             <label class="label" for="title">Title</label>
             <input id="title" class="input" type="text" placeholder="BangBot Player" />
           </div>
@@ -586,10 +598,21 @@ function buildBuilderHtml() {
           </div>
         </form>
         <section class="panel result-panel">
-          <div class="result-box">
-            <div class="label">Embed URL</div>
-            <pre id="resultUrl" class="result-url">Belum ada hasil.</pre>
-            <div id="status" class="status"></div>
+          <div class="result-stack">
+            <div class="result-box">
+              <div class="label">Source URL</div>
+              <pre id="resultSourceUrl" class="result-url">Belum ada hasil.</pre>
+              <div class="actions three">
+                <button class="btn btn-secondary" type="button" id="copySourceBtn">Copy Source</button>
+                <button class="btn btn-secondary" type="button" id="openSourceBtn">Open Source</button>
+                <span></span>
+              </div>
+            </div>
+            <div class="result-box">
+              <div class="label">Embed URL</div>
+              <pre id="resultUrl" class="result-url">Belum ada hasil.</pre>
+              <div class="status" id="status"></div>
+            </div>
           </div>
           <div class="preview-shell">
             <iframe id="previewFrame" class="preview-frame" hidden></iframe>
@@ -603,16 +626,21 @@ function buildBuilderHtml() {
       const srcInput = document.getElementById("src");
       const typeInput = document.getElementById("type");
       const engineInput = document.getElementById("engine");
+      const externalProxyInput = document.getElementById("externalProxy");
       const titleInput = document.getElementById("title");
       const autoplayInput = document.getElementById("autoplay");
       const mutedInput = document.getElementById("muted");
       const controlsInput = document.getElementById("controls");
+      const resultSourceUrl = document.getElementById("resultSourceUrl");
       const resultUrl = document.getElementById("resultUrl");
       const statusEl = document.getElementById("status");
       const previewFrame = document.getElementById("previewFrame");
       const previewPlaceholder = document.getElementById("previewPlaceholder");
       const copyBtn = document.getElementById("copyBtn");
+      const copySourceBtn = document.getElementById("copySourceBtn");
+      const openSourceBtn = document.getElementById("openSourceBtn");
       let lastUrl = "";
+      let lastSourceUrl = "";
 
       async function copyText(value) {
         if (!value) return;
@@ -632,8 +660,11 @@ function buildBuilderHtml() {
           return;
         }
 
+        const externalProxy = String(externalProxyInput.value || "");
+        const finalSourceUrl = externalProxy ? (externalProxy + src) : src;
+
         const params = new URLSearchParams();
-        params.set("src", src);
+        params.set("src", finalSourceUrl);
         if (typeInput.value) params.set("type", typeInput.value);
         if (engineInput.value) params.set("engine", engineInput.value);
         if (titleInput.value.trim()) params.set("title", titleInput.value.trim());
@@ -643,6 +674,7 @@ function buildBuilderHtml() {
         else params.set("controls", "0");
 
         statusEl.textContent = "Generating...";
+        resultSourceUrl.textContent = finalSourceUrl;
         resultUrl.textContent = "Loading...";
         previewFrame.hidden = true;
         previewPlaceholder.hidden = false;
@@ -656,6 +688,7 @@ function buildBuilderHtml() {
             throw new Error(text || "Gagal generate link.");
           }
 
+          lastSourceUrl = finalSourceUrl;
           lastUrl = text;
           resultUrl.textContent = text;
           previewFrame.src = text;
@@ -663,7 +696,9 @@ function buildBuilderHtml() {
           previewPlaceholder.hidden = true;
           statusEl.textContent = "Link siap. Preview dimuat.";
         } catch (error) {
+          lastSourceUrl = finalSourceUrl;
           lastUrl = "";
+          resultSourceUrl.textContent = finalSourceUrl;
           resultUrl.textContent = "Gagal generate.";
           previewFrame.removeAttribute("src");
           previewFrame.hidden = true;
@@ -673,6 +708,11 @@ function buildBuilderHtml() {
       });
 
       copyBtn.addEventListener("click", () => copyText(lastUrl));
+      copySourceBtn.addEventListener("click", () => copyText(lastSourceUrl));
+      openSourceBtn.addEventListener("click", () => {
+        if (!lastSourceUrl) return;
+        window.open(lastSourceUrl, "_blank", "noopener,noreferrer");
+      });
     </script>
   </body>
 </html>`;
@@ -1582,6 +1622,30 @@ export default {
 
       if (requestUrl.pathname === "/builder") {
         return htmlResponse(buildBuilderHtml());
+      }
+
+      if (requestUrl.pathname === "/decode") {
+        const token = String(requestUrl.searchParams.get("token") || "").trim();
+        if (!token) {
+          logError("decode_missing_token", { query: requestUrl.search });
+          return emptyResponse(400);
+        }
+
+        const payload = await decodeToken(token, secret);
+        if (!payload || typeof payload.src !== "string") {
+          logError("decode_invalid_token", { query: requestUrl.search });
+          return emptyResponse(400);
+        }
+
+        const output = String(requestUrl.searchParams.get("output") || "").toLowerCase();
+        const acceptHeader = String(request.headers.get("accept") || "").toLowerCase();
+        const wantsJson = output === "json" || acceptHeader.includes("application/json");
+
+        if (wantsJson) {
+          return jsonResponse(payload);
+        }
+
+        return textResponse(payload.src);
       }
 
       if (requestUrl.pathname === "/proxy") {
